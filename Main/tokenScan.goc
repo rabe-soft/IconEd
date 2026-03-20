@@ -1,0 +1,511 @@
+/**************************************************************************
+ *
+ * PROJECT:	Icon Editor	(GOC Version)
+ * FILE:	token.goc
+ *
+ *		Based on the Icon Editor by Steve Yegge, 1992 - 1994
+ *
+ * REVISION HISTORY:
+ *	Name	Date		Description
+ *	----	----		-----------
+ *	RainerB 1/18/2025	Initial revision
+ *
+ *	This file deals with scanning the token database file for icons
+ *	In a perfect world this should be done by the system API
+ *
+ *	If the API is available, we must be update (simplifiy) the routines
+ *		IconTokenListIcons()
+ *		AnalyseIconMoniker()
+ *
+ *
+ **************************************************************************/
+
+/*  Standard include files */
+@include <stdapp.goh>
+@include <ansi/stdlib.h>
+@include <ansi/stdio.h>
+@include <ansi/string.h>
+@include <win.h>
+
+@include "iconed.goh"
+
+@include "UI/appui.goh"
+@include "token.h"
+@include "initfile.h"
+
+/*---------------------------------------------------------------------------
+	Global Variables and local headers
+ ---------------------------------------------------------------------------*/
+GlobalStruct global;
+
+
+
+word InternalScanTokenDBBruteForce(dword tokenChars, word manufID,
+	Boolean gstringsOnly, MonikerSearchResult *resultList, int listSize);
+Boolean IconScanMonikerForBitmap(VisMoniker *monikerPtr, CBitmap *cBitmap, int *bmpPos, word *opCode, word *size);
+
+
+/*---------------------------------------------------------------------------
+ *
+ *	Search the icons assigned with a articular token
+ *
+ *	Currently (01/2026) there is no API to find out how may icons are assigned
+ *	with a token and for what (display size, display class, icon or tool ..)
+ *	it is intendend for.
+ *	That's why we use a brute force method to scan the database.  We are going
+ * 	through  all conceivable meaningful combinations for DisplayType and
+ *	VisMonikerSearchFlags with TokenLookupMoniker and remember every combination
+ *	that returns a new DBGroupAndItem entry.
+ *
+ ---------------------------------------------------------------------------*/
+
+/* +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ * 	IconTokenListIcons
+ *
+ * Strategy:
+ *	- go through all conceivable meaningful combinations for DisplayType and
+ *	  VisMonikerSearchFlags with TokenLookupMoniker.
+ *	- store every combination that returns a new DBGroupAndItem entry.
+
+ * Return: foundIcons list is filed in
+ *	   retValue: low word: 	number of monikers found when searching for GStrings
+ *	   	     high word: additonal number of monikers found for gstring search = FALSE
+ * +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
+dword IconTokenListIcons(dword tokenChars, word manufID, MonikerFoundStruct *foundIcons) {
+int count;
+int i, n, x;
+MonikerSearchResult  *resultList;
+dword retVal;
+
+
+    /*
+     * No token should have more than 100 different monikers associated ..
+     */
+    resultList = malloc(MAX_SEARCH_RESULT_ICONS*sizeof(MonikerSearchResult));
+
+    /*
+     * At fist, we scan for "gstring only" monikers. This should never
+     * return a text moniker.
+     * Then we scan for "non gstring" monikers and pass the existing list.
+     * This appends only new monikers, not yet found.
+     * Hopefully this are text monikers only.
+     */
+    n = InternalScanTokenDBBruteForce(tokenChars, manufID, TRUE, resultList, 0);
+    x = InternalScanTokenDBBruteForce(tokenChars, manufID, FALSE, resultList, n);
+
+    /*
+     * copy all found monikers
+     */
+    count = n + x;
+    for ( i = 0; i < count; i++ ) {
+	foundIcons[i] = resultList[i].foundInfo;
+    }
+
+    free(resultList);
+
+    retVal = x;
+    retVal = (retVal << 16) + n;
+    return retVal;
+
+}
+
+
+/* +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ *	InternalLookupMoniker
+ *	Find a moniker for the passed icon attributes. Note that TokenLookupMoniker returns the "best fit"
+ *	moniker, if no exact matching moniker is found.
+ * Paramteters: tokenChars, manufID: token to scan
+ 		dispSize, aspect, dispClass, iconStyle: icon atttributes
+ *		searchGString: search for GString monikers (only)
+ *		monikerSearchResult: return moniker information
+ *			in particular monikerSearchResult->monikerInfo holds an
+ *			unique TokenDBItem for each moniker
+ * Return TRUE on error
+ * +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
+Boolean InternalLookupMoniker(dword tokenChars, word manufID,
+		word dispSize, word aspect, word dispClass, word iconStyle, Boolean searchGString,
+		MonikerSearchResult *monikerSearchResult) {
+Boolean ok;
+DisplayType 	displayType;
+VisMonikerSearchFlags searchFlags;
+
+    displayType = dispSize	<< DT_DISP_SIZE_OFFSET |
+    		aspect		<< DT_DISP_ASPECT_RATIO_OFFSET |
+    		dispClass	<< DT_DISP_CLASS_OFFSET;
+    searchFlags = iconStyle	<< VMSF_STYLE_OFFSET |
+    		( searchGString ? VMSF_GSTRING : 0) ;
+		/* VMSF_COPY_CHUNK and VMSF_REPLACE_LIST are left zero */
+
+    ok = TokenLookupMoniker(tokenChars, manufID,
+		       displayType, searchFlags,
+		       &(monikerSearchResult->monikerInfo));
+    monikerSearchResult->foundInfo.displayType = displayType;
+    monikerSearchResult->foundInfo.searchFlags = searchFlags;
+
+    return !ok;
+}
+
+/* +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ *	ToolCompareSearchResult
+ *	See, if the passed TokenMonikerInfo is already in the passed
+ *	MonikerSearchresult List
+ *	Return TRUE if not --> should be added
+ *	       FALSE if found
+ * +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
+Boolean ToolCompareSearchResult(MonikerSearchResult *list, int listSize, TokenMonikerInfo info) {
+int n;
+
+    if (!listSize) return TRUE;
+    for ( n = 0; n < listSize; n++) {
+    	if ( memcmp(&(list[n].monikerInfo), &info, sizeof(TokenMonikerInfo)) == 0 ) return FALSE;
+    }
+    return TRUE;
+}
+
+/* +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ *	InternalScanTokenDBBruteForce
+ *	Builds a list of all possible monikers for an token
+ *	Because we have no access to this internal information, we scan for
+ *	every possible combination of moniker attributes.
+ * Strategy:
+ *	- go through all conceivable meaningful combinations for DisplayType and
+ *	  VisMonikerSearchFlags with TokenLookupMoniker.
+ *	- store (add to list) every combination that returns a new DBGroupAndItem entry.
+ * Parameters:	tokenChars, manufID: 	token to scan
+		gstringsOnly: 	if TRUE, scan for gstrings only
+			I'm not sure if only text monikers are found, if this parameter
+			is set to FALSE, but the algorithm still workd fine, if not.
+		resultList: return: list of found monikers
+ *		listSize: initial list size (new monikers will be appended)
+ * Return: Number of newly appended entries
+ * +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
+word InternalScanTokenDBBruteForce(dword tokenChars, word manufID,
+	Boolean gstringsOnly, MonikerSearchResult *resultList, int listSize) {
+int i, s, a, c, n;
+MonikerSearchResult monikerSearchResult;
+Boolean err;
+
+word iconStyles     [5] = { VMS_ICON, VMS_TOOL, VMS_GRAPHIC_TEXT ,VMS_TEXT, VMS_ABBREV_TEXT };
+word dispSizeList   [4] = { DS_HUGE, DS_LARGE, DS_STANDARD, DS_TINY };
+word aspectList	    [2] = { DAR_NORMAL, DAR_VERY_SQUISHED};
+word dispClassList  [4] = { DC_CF_RGB, DC_COLOR_8, DC_COLOR_4, DC_GRAY_1 };
+
+word *iconStyleList, islCount;
+
+    /*
+     * Searching for icon styles depends on parameter gstringsOnly
+     */
+    if ( gstringsOnly ) {
+    	iconStyleList = iconStyles;
+    	islCount = 3;	/* icons, tools, graphic text */
+    } else {
+    	iconStyleList = &iconStyles[3];
+    	islCount = 3;	/* text, abbrev text */
+    }
+
+    n = 0;	// newly added items
+
+    /*
+     * The order of the loops determines the order in which the
+     * icons are displayed after import.
+     */
+    for ( i = 0; i < islCount; i++) {	// icon style
+     for ( a = 0; a < 2; a++) {		// aspect
+       for ( c = 0; c < 4; c++) {	// display Class
+         for ( s = 0; s < 4; s++) {	// display size
+
+        /*
+         * Find a moniker. This may be an "best fit moniker"
+         */
+	err = InternalLookupMoniker(tokenChars, manufID,
+		dispSizeList[s], aspectList[a], dispClassList[c], iconStyleList[i], gstringsOnly,
+		&monikerSearchResult);
+	if (err) { EC(ProgError("Error in Brute Force Scan");) continue; }
+
+	/*
+	 * See if moniker is already in the list. If not, add them.
+	 */
+	if ( ToolCompareSearchResult(resultList, listSize, monikerSearchResult.monikerInfo) ) {
+	    // Needs to be added
+	    if ( listSize >= MAX_SEARCH_RESULT_ICONS ) {
+	    	ErrorBoxOptr(@TooManyIconsInToken);
+	    	return n;
+	    }
+	    resultList[listSize] = monikerSearchResult;
+	    listSize++;
+	    n++;
+	}
+
+       }
+      }
+     }
+    }
+
+    return n;
+}
+
+
+
+/*-------------------------------------------------------------
+ * ToolCalculateDisplaySize
+ *-------------------------------------------------------------
+ *	Calculate the most probable screren size from icons size
+ *	Note! this can nver be exact!
+ *
+ *	Expects that mars->height, mars->width, mars->isGString,
+ *   	mars->displayClass and mars->aspect are already set
+ *
+ *	large screen	64x40, icon,
+ *	standard screen	48x30, icon,
+ *			15x15  tool
+ *	tiny screen 	32x20, icon,
+ *			15x15  tool
+ *			15x10  CGA tool
+ *
+ *	Note that some monikers ar a few pixels oversized
+ *	--> CGA (very squished) is always a tiny screen
+ *	--> We use minimum size for standars screen	40x25
+ *	    --> all tools are for tiny screen
+ *	--> We use minimum size for large screen	55x35
+ *
+ *	Return DS_-value for this icon
+ *-------------------------------------------------------------*/
+DisplaySize ToolCalculateDisplaySize(MonikerAnalyseResult *mars) {
+
+    if ( !mars->isGString ) return DS_STANDARD;	// text monikers
+
+    if (mars->aspect != DAR_NORMAL)  return DS_TINY;
+    if ( (mars->width < 40) && (mars->height < 25) )  return DS_TINY;
+
+    if ( (mars->width < 55) || (mars->height < 35) ) return DS_STANDARD;
+
+    // DS_HUGE is not supported yet
+    return DS_LARGE;
+
+}
+
+
+/*-------------------------------------------------------------
+ * ToolCalculateIconStlye
+ *-------------------------------------------------------------
+ *	Expects that mars->height, mars->width, mars->isGString,
+ *   	mars->displayClass and mars->aspect are already set
+ *
+ *	Return VMS_-value for this icon
+ *-------------------------------------------------------------*/
+VMStyle ToolCalculateIconStyle(int item, MonikerAnalyseResult *mars) {
+VMStyle style;
+
+    style = global.iconListPtr[item].searchFlags & VMSF_STYLE;
+    style >>= VMSF_STYLE_OFFSET;
+
+    if ( !mars->isGString ) {
+    	// text monikers - style is VMS_TEXT or VMS_ABBREV_TEXT
+        return style;
+    }
+
+    /*
+     * See if the size is too small for an VMS_ICON. Then it may be a tool.
+     * Usually tools are 15x15 pixels, but some may oversized a little
+     */
+    if ( (mars->width <= 18) && (mars->height <= 18) ) return VMS_TOOL;
+    return VMS_ICON;
+
+}
+
+/*------------------------- AnalyseIconMoniker ------------------------------------
+ *
+ *-------------------------------------------------------------
+ *	Return information about the icon
+ *-------------------------------------------------------------*/
+void AnalyseIconMoniker(GeodeToken tok, int item, MonikerAnalyseResult *mars) {
+MemHandle	mh;
+word	monikerSize;
+dword 	tokenDW;
+Boolean	found;
+VisMoniker *monikerPtr;
+CBitmap	cBitmap;
+
+
+    mh = 0;
+    memset(mars, 0, sizeof(MonikerAnalyseResult));
+    memcpy(&tokenDW, &tok.GT_chars[0], 4);
+    found = TokenLoadMonikerBlock( tokenDW, tok.GT_manufID, global.iconListPtr[item].displayType,
+			global.iconListPtr[item].searchFlags, &monikerSize, &mh );
+
+    EC( if ( !found ) { ProgError("Moniker not found in AnalyseIconMoniker"); return; } )
+    EC( if ( !mh ) { ProgError("No mem block in AnalyseIconMoniker"); return; } )
+
+    monikerPtr = MemLock(mh);
+
+    /*
+     * Get information from VisMoniker structure (size, displayClass, aspect ratio)
+     */
+    if (monikerPtr->VM_type & VMT_GSTRING ) {
+	mars->width = monikerPtr->VM_width;
+	mars->height =  ((VisMonikerWithGString*)monikerPtr)->VMWGS_height;
+    	mars->isGString 	= TRUE;
+    } else {
+    	// find out the text len
+    	byte *bPtr;
+	bPtr = (byte*) monikerPtr;
+	bPtr += sizeof(VisMonikerWithText);
+	mars->width = strlen((char*)bPtr);
+	mars->height =  (-1);
+    	mars->isGString 	= FALSE;
+    }
+
+    mars->displayClass = monikerPtr->VM_type & VMT_GS_COLOR;
+    mars->aspect = (monikerPtr->VM_type & VMLET_GS_ASPECT_RATIO) >> VMT_GS_ASPECT_RATIO_OFFSET;
+
+    /*
+     * calculate displaySize and iconStyle
+     */
+    mars->displaySize = 	ToolCalculateDisplaySize(mars);
+    mars->iconStyle = 	ToolCalculateIconStyle(item, mars);
+
+
+    /*
+     * Scan for bitmap information and store them
+     */
+    if ( mars->isGString ) {
+    	int bmpOffs;
+    	word bmpSize, opCode;
+
+	if (IconScanMonikerForBitmap(monikerPtr, &cBitmap, &bmpOffs, &opCode, &bmpSize) ) {
+		mars->bitmapFound = TRUE;
+
+		mars->bitmapOffset = bmpOffs;
+		mars->opCode	= opCode;
+		mars->bitmapDataSize = bmpSize;
+		mars->bmFormat = cBitmap.CB_simple.B_type;
+		mars->compact = cBitmap.CB_simple.B_compact;
+
+		/*
+		 * In a few cases the cached size differs from bitmap size.
+		 * So we must set width and height here again.
+		 */
+		mars->width = cBitmap.CB_simple.B_width;
+		mars->height = cBitmap.CB_simple.B_height;
+
+    	} else {
+		mars->bitmapFound = FALSE;
+    		mars->bmFormat = BMT_MASK | BMF_24BIT;	// simplify creating target bitmap
+    	}
+
+    } /* end of isGString */
+
+
+
+    MemFree(mh);
+}
+
+
+/*--------------------- IconScanMonikerForBitmap ---------------------
+ *  Purpose:	Try to find the bitmap in a VisMonikerWithGString
+ *		We assume that the first command in the GString is a draw-bitmap command
+ *  Context:
+ *  Strategy:
+ *  Parameters:	monikerPtr: pointer to VisMonikerWithGString
+ *		cBitmap:    return bitmap information
+ *		bmpPos:	    position of the draw-bitmap op code,
+ *			    realtive to the start of the VisMoniker
+ *  Return:	TRUE: bitmap found
+ *		      cBitmap and bmpPos are filled in
+ *		      if there is no complex bitmap, complex part is left clear
+ *		FALSE: no bitmap found
+ ---------------------------------------------------------------------------*/
+Boolean IconScanMonikerForBitmap(VisMoniker *monikerPtr, CBitmap *cBitmap, int *bmpOffs, word *opCode, word *size) {
+byte *bPtr;
+Bitmap *bitmapPtr;
+Boolean found;
+
+
+    memset(cBitmap, 0, sizeof(CBitmap));
+    found = FALSE;
+
+    /*
+     * get a pointer to the GString
+     */
+    bPtr =(byte*)monikerPtr;
+    bPtr += sizeof(VisMonikerWithGString);
+
+    /*
+     * Scan the gstring for a draw-bitmap-command
+     */
+    do {
+      switch (*bPtr) {
+
+      /* additional simple commands */
+      case GR_SET_GSTRING_BOUNDS:			// Parameter 4 integer
+    	bPtr += 1 + 4*2;
+    	break;
+      case GR_APPLY_TRANSLATION:			// Parameter 2 WWFixed
+      	EC( MessageBox("GR_APPLY_TRANSLATION found in visMoniker"); )
+    	bPtr += 1 + 2*4;
+    	break;
+
+      /* Draw-bitmap comnds */
+      case GR_FILL_BITMAP:			// Parameter x, y, size (3 word)
+      	*opCode = GR_FILL_BITMAP;
+    	bPtr += 1 + 2*2;			// point to size
+    	found = TRUE;
+    	break;
+
+      case GR_FILL_BITMAP_CP:			// Parameter size (word)
+      	*opCode = GR_FILL_BITMAP_CP;
+    	bPtr += 1;				// point to size
+    	found = TRUE;
+    	break;
+
+      case GR_DRAW_BITMAP:			// Parameter x, y, size (3 word)
+      	*opCode = GR_DRAW_BITMAP;
+    	bPtr += 1 + 2*2;			// point to size
+    	found = TRUE;
+    	break;
+
+      case GR_DRAW_BITMAP_CP:			// Parameter size (word)
+      	*opCode = GR_DRAW_BITMAP_CP;
+    	bPtr += 1;				// point to size
+    	found = TRUE;
+    	break;
+
+      default:
+      	return FALSE;
+      }
+
+      if (found) break;
+
+    } while (TRUE);
+
+    /*
+     * find out if we have a complex bitmap or not
+     * then fill in the relevant cBitmap part
+     */
+
+    *size = * ((word*)bPtr);
+
+    bPtr += 2;			// skip size parameter
+    *bmpOffs = bPtr - (byte*)monikerPtr;
+    bitmapPtr = (Bitmap*)bPtr;
+    if (bitmapPtr->B_type & BMT_COMPLEX) {
+    	cBitmap->CB_simple = *bitmapPtr;
+    } else {
+    	*cBitmap = *( (CBitmap*)bPtr );
+    }
+
+    return TRUE;
+
+}
+
+
+/*---------------------  ---------------------
+ *  Purpose:
+ *  Context:
+ *  Strategy:
+ *  Parameters:
+ *  Return:
+ ---------------------------------------------------------------------------*/
+
+/* *********** End of file tokenScan.goc ********************/
+

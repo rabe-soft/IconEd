@@ -1,0 +1,1279 @@
+/**************************************************************************
+ *
+ * PROJECT:	Icon Editor	(GOC Version)
+ * FILE:	iconed.goh
+ *
+ *		Based on the Icon Editor by Steve Yegge, 1992 - 1994
+ *
+ * REVISION HISTORY:
+ *	Name	Date		Description
+ *	----	----		-----------
+ *	RainerB 7/18/2025	Initial version
+ *
+ *
+ * TERMS:
+ *
+ * One of the problems for the Icon Editor is that there is no exact definition of
+ * what an icon actually is. In the SDK, the term is used both for a set of images
+ * from which GEOS selects the appropriate one depending on the situation, and for
+ * the individual images themselves.
+ *
+ * In the community, the term icon is mainly used for the individual images. There
+ * is no specific term for a set of icons.
+ *
+ * Note: If you know the old version of the Icon Editor, you may remeber that the
+ * 	term icon was used exclusively for a set of images and the term format was
+ *	used for the individual images and their properties.
+ *	In discussions with the community, it became clear that the term format is
+ *	not appropriate here; moreover, many users find it confusing.
+ *
+ * Therefore, I use the term 'icon' for the individual images. The collection of
+ * icons, from which GEOS selects the appropriate one depending on the situation,
+ * is called an 'icon set'.
+ *
+ * In a perfect world, this terminology would be reflected 1:1 in the code. In our
+ * case, however, the terms 'icon' and 'icon set' are very similar. Therefore,
+ * for data structures or objects that explicitly refer to a single icon from the
+ * set, often the term IconEntry is used if the term icon could be ambiguous.
+ *
+ * Hence, the following terms are used:
+ *
+ *	database	This is the document file of the program.
+ *			It contains one or more icon sets.
+ *	icon set	An icon set is a collection of (small) images
+ *			An icon set can be exported to the TokenDatabase file, for example
+ *			This program usually refers a icon set using the ISetHeader
+ *			structure, defined in iconFile.goh.
+ *	icon		This usually means one of the images (and its properties)
+ * 			of an particular icon set, usually referred by a IconEntry
+ * 			structure, which defined in iconFile.goh.
+ *
+ *	ISetHeader	A structure that describes an icon set
+ *	IconEntry	A structure that describes a particular icon from a set
+ *
+ *	mainArray	A HugeArray of ISetHeader structures.
+ *	iEntryList	A ChunkArray of IconEntry structures.
+ *
+ *	token		A token consists of 4 letters and a word. It can be
+ *			interpreted as an index in the token database file and
+ *			references an 'icon set' in this file.
+ *
+ *
+ **************************************************************************/
+
+#ifndef _ICONED_GOH
+#define _ICONED_GOH
+
+@include <stdapp.goh>
+@include <ansi/stdlib.h>
+@include <ansi/stdio.h>
+@include <ansi/string.h>
+@include <impex.goh>
+@include <grobj.goh>
+
+@include "bmptools.goh"		/* powerful bitmap tools */
+@include "lmacros.goh"		/* useful macros */
+
+@include "Main/config.goh"
+@include "Main/iconConstants.h"
+@include "Document/iconFile.goh"
+
+
+/*---------------------------------------------------------------------------
+ 	IconProcessClass
+ ---------------------------------------------------------------------------*/
+@class IconProcessClass, GenProcessClass;
+
+    @message void MSG_ICON_IMPORT_GRAPHIC_WITH_DIALOGS(VMBlockHandle graphic, Boolean isGString);
+		#define IMPORT_TO_NEW_ICON	1
+		#define IMPORT_DRAW_TO_ICON	2
+		#define IMPORT_TO_NEW_ISET	3
+
+    /*
+     * Support for custom color dialog for line and area attributes
+     */
+    @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_ICON_CUSTOM_COLOR_MODE_CHOOSER_CHANGED;
+    		#define CCM_PALETTE_INDEX	1
+    		#define CCM_HSV			2
+
+    @message void MSG_ICON_OPEN_CUSTOM_COLORS_DIALOG(Boolean forAreaColor);
+    @message void MSG_ICON_CLOSE_CUSTOM_COLORS_DIALOG();
+    @message void MSG_ICON_SET_CUSTOM_COLOR(Boolean isAreaColor);
+@if @ENABLE_MORE_SPEED_HSV_OPTION
+    @message (GEN_BOOLEAN_GROUP_APPLY_MSG) MSG_ICON_CUSTOM_COLOR_MORE_SPEED_CHANGED;
+@endif
+
+@if @DEBUG_FLAG
+	@message void MSG_ICON_TEST();
+@endif
+
+    @message void MSG_ICON_SHIFT_IMAGE_TO(ShiftDirection shiftDirection);
+
+    @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_ICON_QUICK_HELP_SIZE_CHANGED;
+    @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_ICON_QUICK_HELP_THEME_CHANGED;
+    	#define HELP_THEME_TERMS	1
+    	#define HELP_THEME_ICONS	2
+    	#define HELP_THEME_COLOR	3
+
+    @message void MSG_ICON_REDRAW_FATBITS();
+
+
+    @message void  MSG_ICON_DO_EXPORT_TOKEN_DB_DIALOG();
+    @message void  MSG_ICON_DO_WRITE_SOURCE_DIALOG();
+
+@endc
+
+/*---------------------------------------------------------------------------
+ 	IconApplicationClass
+ ---------------------------------------------------------------------------*/
+@class IconApplicationClass, GenApplicationClass;
+
+    @message (GEN_BOOLEAN_GROUP_APPLY_MSG) MSG_ICON_APPLICATION_SET_OPTIONS;
+    @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_ICON_APP_UPDATE_ADD_ISET_DIALOG_OPTIONS_UI;
+    @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_ICON_APP_ADD_ISET_DIALOG_COLOR_SCHEME_CHANGED;
+    @message (GEN_BOOLEAN_GROUP_APPLY_MSG) MSG_ICON_APP_ADD_ISET_DIALOG_CUSTOM_TOOLS_CHANGED;
+    @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_ICON_APP_ADD_ICON_DIALOG_COLOR_SCHEME_CHANGED;
+    @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_ICON_APP_ADD_ICON_SET_INITIAL_VALUES;
+
+    @message (GEN_ITEM_GROUP_APPLY_MSG)  MSG_ICON_APP_IMPORT_DESTINATION_CHANGED;
+
+    @message (GEN_VALUE_APPLY_MSG) MSG_ICON_APP_HSV_H_SLIDER_APPLY;
+    @message (GEN_VALUE_APPLY_MSG) MSG_ICON_APP_HSV_S_SLIDER_APPLY;
+    @message (GEN_VALUE_APPLY_MSG) MSG_ICON_APP_HSV_V_SLIDER_APPLY;
+
+    @message void MSG_ICON_APP_CLOSE_DIALOGS();		/* ESC key pressed */
+    @message void MSG_ICON_APP_CLOSE_AND_SELECT_PENCIL(); /* close tool dialogs and enter pencil mode */
+
+    /*
+     * Import / Export token from/to token database
+     */
+    @message (GEN_ITEM_GROUP_APPLY_MSG)   MSG_ICON_APP_APPLY_IMPORT_TOKEN_LIST;
+    @message (GEN_DYNAMIC_LIST_QUERY_MSG) MSG_ICON_APP_QUERY_IMPORT_TOKEN_LIST;
+    @message (GEN_ITEM_GROUP_APPLY_MSG)   MSG_ICON_APP_APPLY_IMPORT_ICON_LIST;
+    @message (GEN_DYNAMIC_LIST_QUERY_MSG) MSG_ICON_APP_QUERY_IMPORT_ICON_LIST;
+    @message void MSG_ICON_APP_APPLY_IMPORT_TOKEN_RANGE();
+    @message void MSG_ICON_APP_DO_IMPORT_TOKEN(Boolean doImport);
+
+    @message (GEN_DYNAMIC_LIST_QUERY_MSG) MSG_ICON_APP_EXPORT_TOKEN_QUERY_ICON;
+    @message (GEN_ITEM_GROUP_APPLY_MSG)   MSG_ICON_APP_EXPORT_TOKEN_SOURCE_CHANGED;
+    @message void MSG_ICON_APP_EXP_TOKEN_CHARS_CHANGED();
+    @message (GEN_VALUE_APPLY_MSG) MSG_ICON_APP_EXP_TOKEN_ID_CHANGED;
+
+    @message (GEN_DYNAMIC_LIST_QUERY_MSG) MSG_ICON_APP_WRITE_SOURCE_QUERY_ICON;
+    @message (GEN_ITEM_GROUP_APPLY_MSG)   MSG_ICON_APP_WRITE_SOURCE_ICON_CHANGED;
+    @message (GEN_ITEM_GROUP_APPLY_MSG)   MSG_ICON_APP_WRITE_SOURCE_HEADER_CHANGED;
+    @message (GEN_ITEM_GROUP_APPLY_MSG)   MSG_ICON_APP_WRITE_SOURCE_LANGUAGE_CHANGED;
+
+@endc
+
+typedef enum  {
+    TO_BITMAP=_FIRST_IconApplicationClass,
+    TO_DB_VIEWER,
+} IconAppTravelOption;
+
+/*
+ * Macros to set travel-option destination for triggers
+ */
+@define SetTriggerDestination_TO_DB_VIEWER \
+    GTI_destination = (TO_DB_VIEWER);	\
+    ATTR_GEN_OUTPUT_TRAVEL_START = @IconApp;	\
+    ATTR_GEN_DESTINATION_CLASS = (ClassStruct*)&IconDBViewerClass
+
+@define SetTriggerDestination_TO_BITMAP \
+    GTI_destination = (TO_BITMAP);	\
+    ATTR_GEN_OUTPUT_TRAVEL_START = @IconApp;	\
+    ATTR_GEN_DESTINATION_CLASS = (ClassStruct*)&FatbitsClass
+
+/*
+ * Macros to set travel-option destination for ItemGroups
+ */
+@define SetItemGroupDestination_TO_DB_VIEWER \
+    GIGI_destination = (TO_DB_VIEWER);	\
+    ATTR_GEN_OUTPUT_TRAVEL_START = @IconApp;	\
+    ATTR_GEN_DESTINATION_CLASS = (ClassStruct*)&IconDBViewerClass
+
+@define SetItemGroupDestination_TO_BITMAP \
+    GIGI_destination = (TO_BITMAP);	\
+    ATTR_GEN_OUTPUT_TRAVEL_START = @IconApp; \
+    ATTR_GEN_DESTINATION_CLASS = (ClassStruct*)&FatbitsClass
+
+/*
+ * Macros to set travel-option destination for Controllers
+ */
+@define SetControllerDestination_TO_BITMAP \
+    GCI_output = (TO_BITMAP);	\
+    ATTR_GEN_OUTPUT_TRAVEL_START = @IconApp; \
+    ATTR_GEN_DESTINATION_CLASS = (ClassStruct*)&FatbitsClass
+
+
+
+void AppMarkBusy(void);
+void AppMarkNotBusy(void);
+
+/*---------------------------------------------------------------------------
+ Klassendefinition WordValueClass  : Dialog zum Žndern des Icons
+	Ein Value-Feld ,daá positive Integer bis zur Wordgrenze versteht
+	initial release.
+	Methoden arbeiten mit festen Werten mfr minimum und Maximum.
+  Achtung! Um die Werte zu setzen und zu lesen MSG_xx_GET / SET_VALUE nutzen
+	MSD_xx_GET / SET_INTEGER_VALUE geht in dieser Implemenetation nicht
+ ---------------------------------------------------------------------------*/
+@class	WordValueClass, GenValueClass;
+	@default	GVLI_maximum = (dword) 0xFFFF;
+	@default	GVLI_increment = (dword)1;
+@endc
+
+
+/*---------------------------------------------------------------------------
+ 	IconDBDocumentClass
+ 	This is the document class for the Icon Viewer App.
+ 	It handles the GEN_DOCUMENT methods.
+
+ 	I had some trouble with the geometry management when I used the document
+ 	object (with @uses VisContentClass, like the original Icon Viewer) as the
+ 	content of the IconDBView. Therefore I have decided to use a separate
+ 	class as content, which is directly subclassed from VisContenClass.
+ 	- Rainer 07/2025
+ ---------------------------------------------------------------------------*/
+@class IconDBDocumentClass, GenDocumentClass;
+    /*
+     * some messages goes to APP_MODEL and must be passed to the DBViewer
+     */
+    @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_DB_DOC_SET_FATBIT_SIZE;
+    @message (GEN_BOOLEAN_GROUP_APPLY_MSG) MSG_DB_DOC_SET_OPTIONS;
+    @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_DB_DOC_SET_VIEW_COLOR;
+
+
+@endc;
+
+/*---------------------------------------------------------------------------
+ 	IconDBViewerClass
+
+ 	This is the content class for the IconDBView.
+ ---------------------------------------------------------------------------*/
+
+
+@class IconDBViewerClass, VisContentClass;
+
+    /*
+     * Handler for Import- or Export-Controller
+     */
+    @message void MSG_DB_VIEWER_PREPARE_FOR_IMPORT(ImpexTranslationParams impexParams);
+    @message void MSG_DB_VIEWER_PREPARE_FOR_EXPORT(ImpexTranslationParams impexParams);
+
+	/*
+	 * Tell the object important things and do GenDocument jobs
+	 */
+    @message void MSG_DB_VIEWER_SET_DOC_FILE(VMFileHandle fh);
+    @message void MSG_DB_VIEWER_SET_DISPLAY_OBJ(MemHandle displayHan);
+    @message MemHandle MSG_DB_VIEWER_GET_DISPLAY();
+    @message void MSG_DB_VIEWER_ATTACH_UI(VMFileHandle fh, GenDocumentOperation op);
+    @message void MSG_DB_VIEWER_HANDLE_RESTORE_FROM_STATE();
+    @message void MSG_DB_VIEWER_DETACH_UI(GenDocumentOperation op);
+    @message void MSG_DB_VIEWER_WRITE_CACHED_DATA_TO_FILE();
+
+    @message optr MSG_DB_VIEWER_GET_VIEW();
+
+	/*
+	 * Work with the icon database
+	 */
+    @message void MSG_DB_VIEWER_DESTROY_LIST();
+    @message void MSG_DB_VIEWER_RESCAN_DATABASE();
+    @message void MSG_DB_VIEWER_EDIT_ISET(Boolean redrawSets);
+    @message void MSG_DB_VIEWER_SET_SINGLE_SELECTION(word iSet);
+
+    @message int  MSG_DB_VIEWER_GET_CURRENT_ICON();
+    @message void MSG_DB_VIEWER_SWITCH_ICON(int icon);
+
+    @message VMFileHandle MSG_DB_VIEWER_GET_DATABASE();
+    @message int MSG_DB_VIEWER_GET_ISET_COUNT();
+    @message int MSG_DB_VIEWER_GET_CURRENT_ISET();
+    @message int MSG_DB_VIEWER_GET_FIRST_SELECTION();
+
+	/*
+	 * Work with icon
+	 */
+    @message void  MSG_DB_VIEWER_ADD_ICON();
+    @message void  MSG_DB_VIEWER_ICON_ADDED(int iconToEdit);
+    @message void  MSG_DB_VIEWER_DUPLICATE_ICON();
+    @message void  MSG_DB_VIEWER_DELETE_ICON();
+    @message void  MSG_DB_VIEWER_RENAME_ICON();
+    @message void  MSG_DB_VIEWER_START_ICON_PROPERTIES_DIALOG();
+    @message void  MSG_DB_VIEWER_CHANGE_ICON_PROPERTIES(Boolean doChange);
+
+    @message void  MSG_DB_VIEWER_EXPORT_ICON_TO_VM_FILE();
+    @message void  MSG_DB_VIEWER_EXPORT_ICON_TO_GRAPHIC_FILE();
+    @message void  MSG_DB_VIEWER_IMPORT_GRAPHIC_FILE();
+    @message void  MSG_DB_VIEWER_SAVE_CURRENT_ICON();
+    @message void  MSG_DB_VIEWER_DISCARD_CURRENT_ICON();
+
+    @message void  MSG_DB_VIEWER_DEAL_WITH_IMPORTED_BITMAP(VMBlockHandle bmp);
+    @message void  MSG_DB_VIEWER_UPDATE_ICON_INFORMATION(int icon);
+    @message VMBlockHandle  MSG_DB_VIEWER_GET_PALETTE_VM_BLOCK();
+
+	/*
+	 * Work with icon sets
+	 */
+    @message void  MSG_DB_VIEWER_ADD_ISET();
+    @message void  MSG_DB_VIEWER_ISET_ADDED(int iSetToSelect);
+    @message void  MSG_DB_VIEWER_DUPLICATE_ISET();
+    @message void  MSG_DB_VIEWER_DELETE_CURRENT_ISET(Boolean confirmDelete);
+    @message void  MSG_DB_VIEWER_RENAME_ISET();
+    @message void  MSG_DB_VIEWER_PREVIEW_ICON();
+    @message void  MSG_DB_VIEWER_INITIATE_IMPORT_TOKEN_DATABASE();
+    @message void  MSG_DB_VIEWER_DO_IMPORT_TOKEN(GeodeToken tok);
+    @message Boolean MSG_DB_VIEWER_INITIALIZE_EXPORT_TOKEN_DB_DIALOG();
+    @message void  MSG_DB_VIEWER_EXPORT_TO_TOKEN_DB();
+
+    @message Boolean  MSG_DB_VIEWER_WRITE_SOURCE_CODE();
+    @message Boolean  MSG_DB_VIEWER_INITIALIZE_WRITE_SOURCE_DIALOG();
+
+    @message void  MSG_DB_VIEWER_MARK_ICON_DIRTY();
+    @message void  MSG_DB_VIEWER_COPY_PASTE_ISET(int operation);
+    	#define ISET_COPY_SET		1
+	#define ISET_PASTE_SET	2
+	#define ISET_SELECT_ALL	3
+
+	/*
+	 * Work with the UI
+	 */
+    @message void MSG_DB_VIEWER_ENABLE_UI(int numSelections);
+    @message void MSG_DB_VIEWER_ISET_TOGGLED(int selected);
+    @message void MSG_DB_VIEWER_UPDATE_SAVE_ICON_TRIGGERS();
+    @message void MSG_DB_VIEWER_UPDATE_EDIT_MENU();
+
+
+	/*
+	 *  The object wants to know the database file. It cannot
+	 *  call the document for that or a nasty deadlock may occur.
+	 */
+    @instance VMFileHandle DBVI_vmFile = 0;	 /* the icon database file */
+
+	/*
+	 *  icon editor related instances
+	 */
+    @instance word DBVI_currentISet = NO_CURRENT_ISET;
+    @instance word DBVI_currentIcon = NO_CURRENT_ICON;
+    @instance word DBVI_numSelected = 0;
+    @instance Boolean DBVI_iconDirty = FALSE;
+    @instance VMBlockHandle DBVI_iconImagePalette;	/* the VM block that holds the current palette
+    							 * is stored in the global.tempFile. If the
+    							 * currently edited bitmap has no palette,
+    							 * DBVI_iconImagePalette is zero. */
+    @instance Boolean DBVI_buttonDown = FALSE;
+    @instance Rectangle DBVI_rubberBand;
+
+	/*
+	 * Undo chain. The chain and all undo data are stored in global.undoFile
+	 */
+    @instance VMBlockHandle	DBVI_undoChain;
+
+
+@if 0
+
+
+MSG_DB_VIEWER_REDRAW_CURRENT_ISET		message
+
+MSG_DB_VIEWER_TEST_TRANSFORM			message
+MSG_DB_VIEWER_CANCEL_TRANSFORM			message
+MSG_DB_VIEWER_TF_SET_DEST_ICON		message
+MSG_DB_VIEWER_TF_SET_SOURCE_ICON		message
+
+MSG_DB_VIEWER_DELETE_ISETS			message
+MSG_DB_VIEWER_DELETE_ISETS_NO_CONFIRM		message
+
+MSG_DB_VIEWER_ON_COLOR_ONE_CHANGED		message
+MSG_DB_VIEWER_ON_COLOR_TWO_CHANGED		message
+MSG_DB_VIEWER_OFF_COLOR_ONE_CHANGED		message
+MSG_DB_VIEWER_OFF_COLOR_TWO_CHANGED		message
+MSG_DB_VIEWER_SET_PREVIEW_OBJECT		message
+MSG_DB_VIEWER_APPLY_PREVIEW_COLOR_CHANGES	message
+MSG_DB_VIEWER_UPDATE_PREVIEW_AREA		message
+MSG_DB_VIEWER_ADD_ISET_DIALOG_TEXT_MODIFIED		message
+MSG_DB_VIEWER_INIT_TF_DIALOG			message
+MSG_DB_VIEWER_INIT_CHANGE_ISET_DIALOG		message
+	;  Sets the glyph for the currently-edited icon set in the change-icon-set
+	;  dialog. Should be called whenever the currently edited icon set changes,
+	;  such as in DBViewerEditIcon, DBViewerAddISet, DBViewerImportGraphic.
+MSG_DB_VIEWER_INITIATE_RESIZE_ICON_DIALOG	message
+	;  Brings up the resize-icon dialog.  First sets the
+	;  GenValues to reflect the current icon's height & width.
+
+MSG_DB_VIEWER_SET_BITMAP_COLORS			message
+MSG_DB_VIEWER_SET_LINE_WIDTH			message
+
+MSG_DB_VIEWER_SET_ICON_OPTIONS		message
+MSG_DB_VIEWER_WRITE_SOURCE			message
+	; call CheckIconDirtyAndDealWithIt
+
+MSG_DB_VIEWER_NOTIFY_CLIPBOARD			message
+
+MSG_DB_VIEWER_IMPORT				message
+	;  Called by the import control, when the user has
+	;  selected a graphic to import.
+** MSG_DB_VIEWER_IMPORT_TOKEN_DATABASE		message
+    @message void  MSG_DB_VIEWER_IMPORT_TOKEN_DATABASE();
+    @message void  MSG_DB_VIEWER_EXPORT_TOKEN_DATABASE();
+	;  Imports selected tokens from the token database.
+	; call CheckIconDirtyAndDealWithIt
+
+MSG_DB_VIEWER_CHANGE_APP_TOKEN			message
+
+MSG_DB_VIEWER_ADD_CHILD				message
+
+MSG_DB_VIEWER_SET_SELECTION			message
+MSG_DB_VIEWER_SHOW_SELECTION			message
+MSG_DB_VIEWER_GET_NUM_SELECTIONS		message
+MSG_DB_VIEWER_GET_MULTIPLE_SELECTIONS		message
+
+MSG_DB_VIEWER_CREATE_TRANSFER_FORMAT		message
+MSG_DB_VIEWER_TRANSFER_TARGET			message
+	;  This unbeautiful hack causes the target exclusive to be
+	;  transferred FROM the document object TO the bitmap object,
+	;  when the user clicks IN the fatbits.
+
+
+
+@endif
+
+@endc;
+
+/*---------------------------------------------------------------------------
+ 	Undo types and flags
+ ---------------------------------------------------------------------------*/
+#define	UNDO_DONT_STORE_IMAGE	0x100
+	/* This flag is set if the operation does not affect the image
+	 * The image then does not need to be saved or redrawn.
+	 */
+
+
+typedef enum {
+
+/* Simple transformations, renamimg etc. */
+    UNDO_NONE		= 0,
+    UNDO_JUST_FOR_REDO	= 1,	/* see MSG_FATBITS_UNDO */
+    UNDO_ROTATE		= 2,
+    UNDO_FLIP		= 3,
+    UNDO_RENAME_ICON	= 4 + UNDO_DONT_STORE_IMAGE,
+    UNDO_DRAW_BITMAP	= 5,	/* draw importet bitmap into existing icon */
+
+
+/* Bitmap operations */
+    UNDO_PENCIL		= 0x10,	/* Free hand painting */
+    UNDO_ERASER		= 0x11,
+    UNDO_DRAW_LINE	= 0x12,
+    UNDO_FILL_RECTANGLE	= 0x13,
+    UNDO_DRAW_RECTANGLE	= 0x14,	/* not filled */
+    UNDO_FILL_ELLIPSE	= 0x15,
+    UNDO_DRAW_ELLIPSE	= 0x16,
+    UNDO_FILL_AREA	= 0x17,
+    UNDO_SHIFT_IMAGE	= 0x18,	/* move whole image */
+    UNDO_MOVE_SELECTION	= 0x19,	/* move selected area */
+    UNDO_FILL_MASK	= 0x1A,
+    UNDO_EDIT_MASK	= 0x1B
+
+
+} UndoType;
+
+
+/*---------------------------------------------------------------------------
+ 	IconDBViewerClass related Macros and Routines
+ ---------------------------------------------------------------------------*/
+
+@define GetDocUIOptr(obj)	ConstructOptr(OptrToHandle(oself),ChunkOf(obj))
+
+void AddVisISet(VMFileHandle vmFile, optr contentObj, int iSet);
+void DisableEditing(void);
+void EnableEditing(void);
+void DeleteISetByNumber(optr oself, int iSet);
+Boolean CheckIconDirtyAndDealWithIt(optr dbViewerObj, Boolean hasCancelTrigger);
+Boolean CheckIconDirtyAndDealWithIt(optr dbViewerObj, Boolean hasCancelTrigger);
+void SetIconDirtyState(IconDBViewerInstance *pself, Boolean state);
+Boolean CheckIconTooLargeAndDealWithIt(int width, int height, BMFormat bmpFormat);
+optr GetEntryDefaultNameOptr(IconParameters params);
+
+/*---------------------------------------------------------------------------
+ 	Definition of VisISetClass - displays a representative icon of an
+ 				     icon set in IconDBView
+ ---------------------------------------------------------------------------*/
+@class VisISetClass, VisClass;
+
+    @message void MSG_VIS_ISET_INITIALIZE(word iSet);
+    @message word MSG_VIS_ISET_GET_NUMBER();
+    @message void MSG_VIS_ISET_SET_SELECTION(Boolean select);
+    @message void MSG_VIS_ISET_SET_SELECTED_STATE(word child,  word uiFunctions);
+    @message void MSG_VIS_ISET_CHECK_IN_RECTANGLE(CheckInRectangleStruct cirs);
+    @message Boolean MSG_VIS_ISET_GET_SELECTION();
+
+    @instance Boolean	VICSI_selected;	/* an object may be selectet even if it is
+    					 * not the currently edited icon set */
+    @instance word 	VICSI_iSetNumber;
+    @instance Rectangle VICSI_bitmapBounds;
+    @instance Rectangle VICSI_textBounds;
+    @instance FileLongName VICSI_iSetName;
+    @instance word	VICSI_ellipsis;	/* where to draw the ellipsis (0 if none) */
+    @instance word	VICSI_numChars;
+
+
+@endc
+
+
+/*---------------------------------------------------------------------------
+ 	Definition of VisIconClass - displays an icon in IconListView
+ ---------------------------------------------------------------------------*/
+
+
+@class VisIconClass, VisClass;
+
+    @message void MSG_VIS_ICON_INITIALIZE(int icon);
+    @message void MSG_VIS_ICON_INVALIDATE();
+
+    	@instance word VII_iconNumber = 0;	/* store it's own number */
+
+@endc
+
+/*---------------------------------------------------------------------------
+ 	Definition of IconViewerClass - the content for the IconListView
+ ---------------------------------------------------------------------------*/
+@class IconViewerClass, VisContentClass;
+
+    /*
+     * We cache the database viewer object for simplificaton.
+     * Any other information can be retirved by calling this object.
+     */
+    @message void 	MSG_ICON_VIEWER_SET_VIEWER_OBJECT(optr dbViewerObj);
+    @message optr 	MSG_ICON_VIEWER_GET_VIEWER_OBJECT();
+
+
+    @message VMFileHandle MSG_ICON_VIEWER_GET_DATABASE();
+    @message int 	MSG_ICON_VIEWER_GET_CURRENT_ISET();
+    @message int 	MSG_ICON_VIEWER_GET_CURRENT_ICON();
+
+    @message void	MSG_ICON_VIEWER_RESCAN_LIST();
+    @message void	MSG_ICON_VIEWER_DESTROY_LIST();
+    @message void	MSG_ICON_VIEWER_REDRAW_ICON(int icon);
+
+    @instance	optr	IVI_dbViewerObj;	/* makes things simpler */
+
+/*    @instance	VMFileHandle	IVI_databaseFile; */
+/*    @instance	int		IVI_currentISet = NO_CURRENT_ISET; */
+/*    @instance	int		IVI_currentIcon = NO_CURRENT_ICON; */
+
+@endc
+
+
+
+/*---------------------------------------------------------------------------
+
+ 	Definition of FatbitsClass - the content for the FatbitsView
+
+	Concept:
+ 	We don't use a classic combination of a VisContent and a VisFatbits
+ 	object as the original code by Steve it does. Instead, we create our own
+ 	Fatbits object class which handles all neccessary operations.
+
+	The FatbitsClass manages the bitmap that is currently being edited and
+	also handles all edits. It also contains a pointer (optr) of an object
+	that is informed as soon as the bitmap has been changed. This object
+	can then display the bitmap in its original size in its current state
+	(life preview).
+
+	The bitmap to be edited is stored in a temporary file that can be accessed
+	via the global variable global.tempFile. Even if this is not object-oriented,
+	it avoids many problems that could arise when closing a document or
+	shutting down GEOS.
+ ---------------------------------------------------------------------------*/
+@class FatbitsClass, VisContentClass;
+
+@uses GrObjClass;	/* let's handle GrObj messages from graphics controller */
+
+
+    @message void 	MSG_FATBITS_SET_PIXEL_SIZE(int size);
+    @message int 	MSG_FATBITS_GET_PIXEL_SIZE();
+
+
+    @message void	MSG_FATBITS_DUPLICATE_AND_USE_BITMAP(VMFileHandle vmFile, VMBlockHandle bmpHandle);
+    @message void	MSG_FATBITS_UPDATE_MASK_BMP();
+    @message void	MSG_FATBITS_FREE_BITMAP();
+    @message void  	MSG_FATBITS_RESIZE_AND_REDRAW(Boolean forceRebuild);
+
+    @message void	MSG_FATBITS_USE_ICON(VMFileHandle vmFile, int iSet, int icon);
+    @message void	MSG_FATBITS_SAVE_ICON(VMFileHandle vmFile, int iSet, int icon);
+
+
+
+    @message void	MSG_FATBITS_SEND_NOTIFICATIONS(word sendFlags);
+    			#define SEND_AREA_NOTIFICATIONS		0x01
+    			#define SEND_LINE_NOTIFICATIONS		0x02
+    			#define SEND_BMPTOOLS_NOTIFICATIONS	0x04
+    			#define SEND_ALL_NOTIFICATIONS		0xFF
+
+
+    /*
+     * Handling line and area attributes
+     */
+    @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_FATBITS_SET_LINE_COLOR_FROM_INDEX;
+    @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_FATBITS_SET_AREA_COLOR_FROM_INDEX;
+    @message void	MSG_FATBITS_GET_COLORS(PaletteEntry *lineColor, PaletteEntry *areaColor);
+    @message void	MSG_FATBITS_VERIFY_COLORS();
+
+    @message void	MSG_FATBITS_SET_ATTRS(IconLineAttrs lineAttrs, IconAreaAttrs areaAttrs);
+    @message void	MSG_FATBITS_GET_ATTRS(IconLineAttrs *lineAttrs, IconAreaAttrs *areaAttrs);
+
+    @message (GEN_ITEM_GROUP_STATUS_MSG) MSG_FATBITS_AREA_EXTRA_APP_UI_STATUS_MSG;
+    @message (GEN_ITEM_GROUP_STATUS_MSG) MSG_FATBITS_LINE_EXTRA_APP_UI_STATUS_MSG;
+
+
+    /*
+     * Fatbits stores the drawing attributes to work with. It loads the attributes
+     * form current icon, when icon or icon set changes.
+     * Every time the user changes an attribute, it is also immediately written
+     * to the icon. µµ stimmt das noch?
+     */
+    @message void 	MSG_FATBITS_READ_DRAW_ATTRS_FROM_ICON(int icon);	/* µµ Nicht mehr benutzt?? --> löschen */
+    @message void 	MSG_FATBITS_WRITE_DRAW_ATTRS_TO_ICON();
+
+
+    /*
+     * Handling bitmap edit tools (pencil, ellipse, eraser ...)
+     * We have a START_SELECT, META_PTR and END_SELECT message for most
+     * of the tools. Some tools have additonal messages.
+     */
+    @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_FATBITS_SET_BITMAP_TOOL;
+
+    @prototype void FATBITS_MOUSE_MSG(int xPos, int yPos);
+
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_SELECTION_START_SELECT;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_SELECTION_META_PTR;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_SELECTION_END_SELECT;
+    @message void MSG_FATBITS_START_ANTS();
+    @message void MSG_FATBITS_NEXT_ANTS();
+    @message void MSG_FATBITS_KILL_ANTS();
+    @message void MSG_FATBITS_SELECTION_PTR_MOVE_COPY(int xPos, int yPos);
+    @message void MSG_FATBITS_SELECTION_MOVE_SELECTED_AREA();
+
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_PENCIL_START_SELECT;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_PENCIL_META_PTR;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_PENCIL_END_SELECT;
+
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_ERASR_START_SELECT;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_ERASR_META_PTR;
+
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_LINE_START_SELECT;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_LINE_META_PTR;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_LINE_END_SELECT;
+
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_FILL_RECT_START_SELECT;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_FILL_RECT_META_PTR;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_FILL_RECT_END_SELECT;
+
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_RECTANGLE_START_SELECT;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_RECTANGLE_META_PTR;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_RECTANGLE_END_SELECT;
+
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_FILL_ELLIPSE_START_SELECT;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_FILL_ELLIPSE_META_PTR;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_FILL_ELLIPSE_END_SELECT;
+
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_ELLIPSE_START_SELECT;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_ELLIPSE_META_PTR;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_ELLIPSE_END_SELECT;
+
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_FLOOD_FILL_START_SELECT;
+
+    @message void MSG_FATBITS_SHIFT_IMAGE_TO_LEFT();
+    @message void MSG_FATBITS_SHIFT_IMAGE_TO_RIGHT();
+    @message void MSG_FATBITS_SHIFT_IMAGE_UP();
+    @message void MSG_FATBITS_SHIFT_IMAGE_DOWN();
+
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_FILL_MASK_START_SELECT;
+
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_EDIT_MASK_START_SELECT;
+    @message (FATBITS_MOUSE_MSG) MSG_FATBITS_EDIT_MASK_META_PTR;
+
+    @message void MSG_FATBITS_REDRAW_AFTER_DRAG();
+    @message void  MSG_FATBITS_REDRAW_AFTER_DRAG_TOOL_FINISHED(int lineWidth);
+
+    /*
+     * Not-tool-based editing
+     */
+    @message void  MSG_FATBITS_TRANSFORM_ICON(int operation);
+    @message void  MSG_FATBITS_DRAW_BITMAP_INTO_CURRENT(VMFileHandle vmFile, VMBlockHandle newBmp, StandardDrawingPostion pos);
+    @message void  MSG_FATBITS_DRAW_BITMAP_AT_XY(VMFileHandle vmFile, VMBlockHandle newBmp, int x0, int y0);
+
+
+
+	/*
+	 * Undo/redo chain. Undo types are defined above.
+	 * Internal undo related structures are defined in document/undo.goc
+	 */
+    @message void MSG_FATBITS_CREATE_UNDO_CHAIN();
+    @message void MSG_FATBITS_UNDO_FLUSH_CHAIN(Boolean freeItems);
+
+    @message void MSG_FATBITS_UNDO_SAVE_ICON_STATE(UndoType undoType);
+
+    @message void MSG_FATBITS_UNDO();
+    @message void MSG_FATBITS_REDO();
+    @message void MSG_FATBITS_ENABLE_UNDO_TRIGGERS();
+    @message void MSG_FATBITS_UPDATE_UNDO_TRIGGERS();
+
+    @message void MSG_FATBITS_SET_FLAGS(word flagsToSet, word flagsToClear);
+
+
+
+    @instance	int		FBI_pixelSize;
+
+    	/*
+    	 * Since GrSetBitmapMode() fails when we try to edit the mask of a true color
+    	 * image (at least in BBX 4.x), we have a separate monochrome bitmap that
+    	 * contains a copy of the mask.
+	 * After we have modified this mask bitmap, we copy it back into the original bitmap.
+	 */
+    @instance	VMBlockHandle	FBI_bitmap = 0;	/* Bitmap is stored in global.tempFile */
+    @instance	VMBlockHandle	FBI_maskBmp = 0;
+
+	/* Cache Information about the currently editied bitmap like BMT_PALETTE.
+	 * color depth and bitmap's size.
+	 */
+    @instance	BMType		FBI_bmFormat;
+    @instance	int		FBI_xSize;
+    @instance	int		FBI_ySize;
+
+	/* FBI_imageObj shares a bitmap with the Fatbits object and
+	 * therefore it MUST be driven by the same thread. Usually,
+	 * this object resides in the same resource as the Fatbits
+	 * object and anything is fine.
+	 */
+    @instance	optr		FBI_imageObj = 0;
+
+	/*
+	 * Edit Bitmap related instances
+	 */
+    @instance	IconLineAttrs   FBI_lineAttrs;
+    @instance	IconAreaAttrs   FBI_areaAttrs;
+
+	/*
+	 * Each tool (pencil, eraser, draw ellipse ..) has its own message
+	 * for different mouse events. FBI_~Msg stored this message for
+	 * the active tool.
+	 */
+    @instance 	word 	FBI_currentTool;	/* BFT_PENCIL, BTF_ERASER, ... */
+    @instance	Message FBI_startSelectMsg;
+    @instance	Message FBI_metaPtrMsg;
+    @instance	Message FBI_endSelectMsg;
+
+	/*
+	 * All tools must write on the screen.
+	 * Some tools, like eraser, work directly with the bitmap (and the maskBmp),
+	 */
+    @instance	GStateHandle	FBI_screenGState;
+    @instance	GStateHandle	FBI_bitmapGState;
+    @instance	GStateHandle	FBI_maskGState;
+
+	/*
+	 * Other tools, such as the line tool, create a rubber outline when dragged with the mouse.
+	 * They need a 24-bit bitmap for buffering.
+	 * Parts of this strcuture are also uesed by the selection tool
+	 */
+    typedef struct {
+	int x0, y0, x1, y1;	/* Coordinates for drawing outline graph */
+	VMBlockHandle	bmp;	/* buffer bitmap for drawing outlines */
+	GStateHandle	gstate;	/* gstate for drawing to the buffer bitmap */
+	Boolean nextClear;	/* Set, if next INVERSE drawing clears last dawing */
+
+	int	selDX, selDY;	/* Offset target position for moving the selected
+				 * area relative to the selected area. */
+	int 	mcX0, mcY0;	/* last mouse position for move-copy operation */
+	} FBDragStruct;
+
+    @instance   FBDragStruct	FBI_drag;
+
+	/*
+	 * Selection tool needs some extra data for selection ants
+	 */
+    typedef struct {
+    	TimerHandle	th;
+    	word	tID;
+    	word	antState;
+    		#define ANT_STATE_NO_ANTS	0		/* <-- MUST be zero */
+    		#define ANT_STATE_1		LS_DASHED
+    		#define ANT_STATE_2		LS_DOTTED
+    		#define ANT_STATE_3		LS_DASHDOT
+    	} FBAntStruct;
+
+    @instance 	FBAntStruct	FBI_ants;
+
+	/*
+	 * A field for common purpsoe flags
+	 */
+    @instance 	word	FBI_flags;
+	 #define FB_MOVE_COPY_IS_ACTIVE		1
+
+
+	/*
+	 * The undo Chain
+	 */
+    @instance VMBlockHandle FBI_undoChain;
+
+
+@endc
+/*---------------------------------------------------------------------------
+ 	FatbitsClass related Macros and Routines
+ ---------------------------------------------------------------------------*/
+void IconUpdateIconInformation(optr oself, int icon);
+void FatbitsDrawGrid(GStateHandle gstate, int curTool, int grid, int width, int height);
+
+
+/*---------------------------------------------------------------------------
+ 	Definition of FatbitsViewClass
+
+	We want to detect when the mouse pointer leaves the view area
+ ---------------------------------------------------------------------------*/
+@class FatbitsViewClass, GenViewClass;
+
+	@alias (MSG_META_RAW_UNIV_ENTER) void MSG_FATBITS_VIEW_ENTER
+		 (optr inputObj = cx:dx, WindowHandle ptrWin = bp);
+	@alias (MSG_META_RAW_UNIV_LEAVE) void MSG_FATBITS_VIEW_LEAVE
+		 (optr inputObj = cx:dx, WindowHandle ptrWin = bp);
+@endc
+
+
+/*---------------------------------------------------------------------------
+    Definition of OtherContentClass for different purposes
+
+    - OCI_type = OC_TYPE_BITMAP
+      used for all content objects, that display an bitmap image
+
+	The bitmap to display is stored in a temporary file that can be accessed
+	via the global variable global.tempFile. OK, this is not object-oriented,
+	but it avoids many problems that could arise when closing a document or
+	shutting down GEOS.
+
+    - OCI_type = OC_TYPE_PALETTE
+      used do display a color palette
+
+    - OCI_type = OC_TYPE_SINGLE_COLOR
+      used do display a colored rectangle
+
+    - OCI_type = OC_TYPE_COLOR_BAR
+      used do display a rectangle with differen colors
+
+    - OCI_type = OC_TYPE_TOKEN
+      used do display a token from token database file, centred, with a frame
+
+    - OCI_type = OC_TYPE_ICON_BITMAP
+      used do display a icon bitmap, centred, with a frame
+
+  ---------------------------------------------------------------------------*/
+
+@class OtherContentClass, VisContentClass;
+
+    @instance int	OCI_type = 0;
+    	#define OC_TYPE_BITMAP		0
+    	#define OC_TYPE_PALETTE		1
+    	#define OC_TYPE_SINGLE_COLOR	2
+    	#define OC_TYPE_COLOR_BAR	3
+    	#define OC_TYPE_TOKEN		4
+    	#define OC_TYPE_ICON_BITMAP	5
+
+    @message void MSG_OTHER_CONTENT_REDRAW_IMAGE();	/* works for all types */
+
+	/* -------------------------------------------
+	 * OC_TYPE_BITMAP related messages and instances
+	 */
+    @message void MSG_OTHER_CONTENT_USE_IMAGE(VMBlockHandle bmp);
+
+    @instance VMBlockHandle	OCI_bitmap = 0;	/* Bitmap is stored in global.tempFile */
+    @instance int		OCI_margin;	/* Space around the bitmap */
+
+	/* -------------------------------------------
+	 * OC_TYPE_SINGLE_COLOR related messages and instances
+	 */
+    @message void MSG_OTHER_CONTENT_SET_COLOR(int r, int g, int b);
+
+    @instance PaletteEntry	OCI_color;
+
+	/* -------------------------------------------
+	 * OC_TYPE_COLOR_BAR related messages and instances
+	 */
+    @message void MSG_OC_CREATE_COLOR_BAR(int h, int s, int v, int type, Boolean redraw);
+    	#define CREATE_H_BAR	1
+    	#define CREATE_S_BAR	2
+    	#define CREATE_V_BAR	3
+    @message void MSG_OC_DESTROY_COLOR_BAR();	/* clean up */
+
+    @instance MemHandle OCI_colorBarBlock; 	/* contains 256 rgb values */
+
+	/* -------------------------------------------
+	 * OC_TYPE_TOKEN related messages and instances
+	 */
+    @message void MSG_OC_SET_TOKEN(GeodeToken tok);
+    @message void MSG_OC_DRAW_TOKEN(GStateHandle gstate);
+
+    @instance GeodeToken OCI_token;
+
+
+	/* -------------------------------------------
+	 * OC_TYPE_ICON_BITMAP related messages and instances
+	 * uses OCI_bitmap
+	 */
+    @message void MSG_OC_REPLACE_BITMAP(VMBlockHandle bmp);
+    @message void MSG_OC_DRAW_ICON(GStateHandle gstate);
+
+
+@endc
+
+/*---------------------------------------------------------------------------
+ 	Definition of SmartTextClass
+ 	- monitors it's own empty status
+ 	- monitors text changes
+  ---------------------------------------------------------------------------*/
+@class SmartTextClass, GenTextClass;
+    @instance optr STI_enableObj = 0;
+
+    @instance optr STI_textChangeOutput = 0;
+    @instance Message STI_textChangeMsg = 0;
+    @prototype void SMART_TEXT_CHANGE_MSG();
+
+@endc
+
+/*---------------------------------------------------------------------------
+ 	ToolOnlyControlClass
+
+ 	Unfortunately the ToolControl can only handle tool groups that are
+ 	associated with an controler. For special cases, such as spacers in
+ 	the tool bar or our EditControl replacement, we therefore need our own
+ 	controller, subclassed from GenControlClass.
+
+ ---------------------------------------------------------------------------*/
+@class ToolOnlyControlClass, GenControlClass;
+    	/* The controller name appears in the tool group list of the 'customize
+    	 * tools' dialog. TOCI_controllerName must point to a chunk in the same
+    	 * resource as the controller is. */
+    @instance ChunkHandle TOCI_controllerName = 0;
+
+    @prototype void TOC_SETUP_TOOL_MSG(GenControlBuildInfo *info);
+
+    @message (TOC_SETUP_TOOL_MSG) MSG_TOC_SETUP_EDIT_CONTROL_TOOLS;
+    @message (TOC_SETUP_TOOL_MSG) MSG_TOC_SETUP_BITMAP_CONTROL_TOOLS;
+
+    @instance Boolean	TOCI_SetupToolMsg = 0;
+
+    @message void MSG_TOC_ENABLE_EDIT_TOOL_TRIGGERS(word enableTriggers, word disableTriggers);
+		/* pass ETF_~ constants for enableTriggers and disableTriggers */
+
+    @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_TOC_SELECT_BITMAP_TOOL;
+		/* pass BTF_~ constants as selection */
+
+@endc;
+
+/* Edit tool toolbox features */
+	#define		ETF_TRIG_COPY	1
+	#define		ETF_TRIG_PASTE	2
+	#define		ETF_TRIG_UNDO	4
+	#define		ETF_TRIG_REDO	8
+	#define		ETF_DEFAULT_FEATURES (ETF_TRIG_COPY | ETF_TRIG_PASTE | ETF_TRIG_UNDO | ETF_TRIG_REDO)
+/*
+ * Bitmap tool toolbox features  - also used as the identifiers for the tool items and for
+ * fatbits instance variable FBI_currentTool -> ALL available edit tools must be listed here
+ */
+	#define		BTF_SELECTION	1
+	#define		BTF_PENCIL	2
+	#define		BTF_ERASER	4
+	#define		BTF_LINE	8
+	#define		BTF_FILL_RECT	0x10
+	#define		BTF_RECTANGLE	0x20
+	#define		BTF_FILL_ELLIPSE 0x40
+	#define		BTF_ELLIPSE	0x80
+	#define		BTF_FLOOD_FILL	0x100
+	#define		BTF_FILL_MASK	0x200
+	#define		BTF_EDIT_MASK	0x400
+	#define		BTF_SHIFT_IMG	0x800
+
+@if @SHIFT_IMAGE_IS_A_BITMAP_TOOL
+	#define		BTF_ALL_FEATURES ( 0xFFF /* BTF_SELECTION ... BTF_SHIFT_IMG */ )
+@elseif
+	#define		BTF_ALL_FEATURES ( 0x7FF /* BTF_SELECTION ... BTF_EDIT_MASK */ )
+@endif
+
+	#define		BTF_DEFAULT_FEATURES 	BTF_ALL_FEATURES
+
+	/* Initial tool and corresponding mouse messages */
+	#define 	BTF_INITIAL_TOOL		BTF_PENCIL
+	#define	    	INITIAL_START_SELECT_MSG	MSG_FATBITS_PENCIL_START_SELECT
+	#define	    	INITIAL_META_PTR_MSG		MSG_FATBITS_PENCIL_META_PTR
+	#define	    	INITIAL_END_SELECT_MSG		0
+
+
+
+
+/*---------------------------------------------------------------------------
+ 	Definition of PaletteColorItemGroupClass
+ 	This class can create vis-monikers for its children. These are colored
+ 	areas or colored lines whose color depends on the current palette.
+  ---------------------------------------------------------------------------*/
+@class PaletteColorItemGroupClass, GenItemGroupClass;
+    @message void MSG_PCIG_CREATE_VIS_MONIKERS(int type);
+    	#define PCI_MONIKER_LINE	1
+    	#define PCI_MONIKER_AREA	2
+@endc
+
+/*---------------------------------------------------------------------------
+	Global definitions
+ * ---------------------------------------------------------------------------*/
+
+
+/* Protocol number for work with VM files */
+#define DOCUMENT_PROTOCOL_MAJOR       2
+#define DOCUMENT_PROTOCOL_MINOR       0
+
+
+
+/* ------ All global variables are stored in a single structure ------ */
+
+typedef struct {
+
+	/* Temp file to hold some bitmaps */
+	VMFileHandle 	tempFile;		/* all purpose temp file */
+	VMFileHandle 	undoFile;		/* holds undo data */
+
+	/* global options and more*/
+	Boolean	editISetWithSingleClick; /* If set, the set of icons will be seelcted for
+					 * edited with a single mouse click. If not set,
+					 * the set must be double clicked to edit it.
+					 */
+
+	Boolean	coloredIconListView; 	/* If set, the IconList will be drawn colored,
+					 * if not, it will use the same color as parent view.
+					 * Some people might find this more beautiful.
+					 */
+@if @ENABLE_BACKGROUND_PATTERN
+	Boolean useBackgroundPattern;	/* If set, the Fatbits draws a background pattern so that
+					 * transparent areas are made more noticeable.
+					 */
+@endif
+
+	optr curFatbits;		/* Pointer to current MyFatbits object,
+					 * used by MSG_META_SEND_CLASSED_EVENT to redirect
+					 * events with the travel option TO_BITMAP to
+					 * the correct object.
+					 */
+
+	VMBlockHandle paletteVMBlock;	/* A vm block in the global.tempFile that holds
+					 * a color palette with up to 256 colors.
+					 * This is the palette of the currently editied bitmap
+					 * If the bitmap has no palette, this is a NULL handle.
+					 */
+	MemHandle	paletteMH;	/* MemHandle required to unlock paletteVMBlock */
+
+	int	currentPaletteIndex;	/* Currently selected color index in the custom colors
+					 * dialog of the line attrs and area attrs controllers.
+					 */
+
+	/* Variables used for import from or export to tokenDB file */
+	// µµ Beschriebung prüfen
+	MemHandle	tokenListMH;	 /* list of all tokens in the token database file */
+	MonikerFoundStruct *iconListPtr; /* Unique DisplayType/SearchFlags for every icon for a token.
+					µµ - update info when brute force scanning is removed
+					  * Note that this are not really the true  values
+					  * assigned to this icon, but they are unique */
+	word 		numIconsInList;  /* number of valid entries in *iconListPtr list
+					  */
+
+	word		flags;		/* Flagbits for different purposes */
+		#define	GF_WRITE_CODE_DOUBLE_NAMES	1	/* There are two or more icons with the
+								 * same name. This requres extra effort
+								 * to make the names unique. */
+		#define GF_WRITE_CODE_CURRENT_ICON_ONLY	2	/* This flag tells the WriteSourceMonikerList
+								 * that olny the current icon sohlud be
+								 * displayed */
+
+@if @DEBUG_FLAG
+	sdword testVal;			/* global working cell for debugging */
+@endif
+	} GlobalStruct;
+
+
+/*----------------------------------------------------------------------------
+ * Working with the clipboard
+ *----------------------------------------------------------------------------*/
+Boolean ToolTestClipboardItem(word manufID, word format, ClipboardItemFlags flag);
+
+
+/*----------------------------------------------------------------------------
+ * Low level routines for database access
+ *----------------------------------------------------------------------------*/
+int 		IdAddISet(VMFileHandle vmFile, int count);
+void 		IdDeleteISet(VMFileHandle vmFile, int iSet);
+word 		IdGetISetCount(VMFileHandle vmFile);
+
+void 		IdCreateEntries(VMFileHandle vmFile, int iSet, int count);
+		/*void 	IdClearEntry(VMFileHandle vmFile, int iSet, int icon);*/
+void 		IdDeleteEntry(VMFileHandle vmFile, int iSet, int icon);
+void		IdFreeEntries(VMFileHandle vmFile, int iSet);
+
+void		IdGetISetHeader(VMFileHandle vmFile, int iSet, ISetHeader *header);
+void		IdSetISetHeader(VMFileHandle vmFile, int iSet, ISetHeader *header);
+
+void 		IdIncEntryCount(VMFileHandle vmFile, int iSet);
+void 		IdDecEntryCount(VMFileHandle vmFile, int iSet);
+
+VMBlockHandle 	IdGetEntryBitmap(VMFileHandle vmFile, int iSet, int icon);
+void		IdClearAndSetEntryBitmap(VMFileHandle vmFile, int iSet, int icon, VMBlockHandle newBmp);
+		//-original: IdGetEntry
+
+void 		IdSetEntryBitmapNoCopy(VMFileHandle vmFile, int iSet, int icon, VMBlockHandle bmp);
+    		//-original: IdSetEntryNoCopy
+VMBlockHandle 	IdGetEntryBitmap(VMFileHandle vmFile, int iSet, int icon);
+void		IdGetEntry(VMFileHandle vmFile, int iSet, int icon, IconEntry *retEntry);
+void 		IdSetEntry(VMFileHandle vmFile, int iSet, int icon, IconEntry iEntry);
+
+void 		IdSetEntryParameters(VMFileHandle vmFile, int iSet, int icon, IconParameters params);
+void 		IdSetEntryType(VMFileHandle vmFile, int iSet, int icon, word vmlet);
+word		IdGetEntryType(VMFileHandle vmFile, int iSet, int icon);
+
+void		IdSetEntryCount(VMFileHandle vmFile, int iSet, int count);
+int 		IdGetEntryCount(VMFileHandle vmFile, int iSet);
+
+void 		IdGetEntryDimensions(VMFileHandle vmFile, int iSet, int icon, int *width, int *height);
+    //-IdGetEntryColorScheme		-- returns BMFormat for the icon
+
+word 		IdGetFlags(VMFileHandle vmFile, int iSet);
+void 		IdSetFlags(VMFileHandle vmFile, int iSet, word flags);
+
+Boolean 	IdGetISetName(VMFileHandle vmFile, int iSet, char *name);
+Boolean 	IdSetISetName(VMFileHandle vmFile, int iSet, char *name);
+
+Boolean		IdGetEntryName(VMFileHandle vmFile, int iSet, int icon, char *name);
+Boolean 	IdSetEntryName(VMFileHandle vmFile, int iSet, int icon, char *name);
+
+
+    //-IdGetPreviewObject		-- returns the preview object for an icon set
+void 		IdSetPreviewObject(VMFileHandle vmFile, int iSet, PreviewGroupInteractionObject obj);
+    //-IdGetPreviewColors		-- returns the preview colors for an icon set
+void 		IdSetPreviewColors(VMFileHandle vmFile, int iSet, int onFirstC, int onSecondC, int offFirstC, int offSecondC);
+
+    //-IdDiscardIcon ->ISet			-- discards the mem handles for the icon set
+
+ISetHeader*	IdLockIconHeader(VMFileHandle vmFile, int iSet);
+void 		IdUnlockIconHeader(ISetHeader *iHeader, Boolean makeDirty);
+VMBlockHandle 	IdGetHugeArray(VMFileHandle vmFile);
+void 		IdDirtyISet(ISetHeader *iHeader);
+optr		IdLockEntryList(VMFileHandle vmFile, int iSet);
+void 		IdUnlockEntryList(optr list, Boolean makeDirty);
+
+
+VMBlockHandle 	IdGetIconExtraBlock( VMFileHandle vmFile, int iSet, int icon);
+void 		IdSetLineAttrs(VMFileHandle vmFile, int iSet, int icon, IconLineAttrs *lineAttrs);
+void 		IdSetAreaAttrs(VMFileHandle vmFile, int iSet, int icon, IconAreaAttrs *areaAttrs);
+void 		IdGetLineOrAreaAttrs(VMFileHandle vmFile, int iSet, int icon, IconLineAttrs *lineAttrs, IconAreaAttrs *areaAttrs);
+
+VMBlockHandle 	IdGetISetExtraBlock( VMFileHandle vmFile, int iSet);
+void 		IdSetToken(VMFileHandle vmFile, int iSet, GeodeToken token);
+GeodeToken 	IdGetToken(VMFileHandle vmFile, int iSet);
+
+/*----------------------------------------------------------------------------
+ * Low level routines for working with bitmaps
+ *----------------------------------------------------------------------------*/
+VMBlockHandle 	CreateBitmapDataOnly(VMFileHandle vmFile, BMFormat bmf, int width, int height, PaletteEntry *palette);
+VMBlockHandle 	ToolCreateBitmap(VMFileHandle vmFile, BMFormat bmfmt, int width, int height, PaletteEntry *palette, Boolean clear);
+void 		ToolDestroyBitmap(VMFileHandle vmFile, VMBlockHandle bmp);
+
+/*----------------------------------------------------------------------------
+ * Create and destroy icons or sets of icons
+ *----------------------------------------------------------------------------*/
+int 	CreateNewFileISet(VMFileHandle vmFile, word iconFormats);
+int 	CreateNewToolISet(VMFileHandle vmFile);
+int 	CreateNewCustomISet(VMFileHandle vmFile);
+int 	CreateNewMousePointer(VMFileHandle vmFile);
+void 	InitializeIcon(VMFileHandle vmFile, int iSet, int icon, IconParameters params);
+void 	AssignInitialIconName(VMFileHandle vmFile, int iSet, int icon, IconParameters params, Boolean useFileIconPrefix);
+void	FinishInitializingISet(VMFileHandle vmFile, int iSet, char *name);
+void 	InitializeCustomIcon(VMFileHandle vmFile, int iSet, int icon, int style,
+				int width, int height, int bitmapColor,
+				int displaySize, int aspect);
+void 	InternalInitializeIconEntryType(VMFileHandle vmFile, int iSet, int icon, int style,
+				int displayClass, int displaySize, int aspect);
+void 	InitializeIconFromImport(VMFileHandle vmFile, int iSet, int icon, VMBlockHandle bmp,
+				int displayClass, int style, int displaySize, int aspect);
+void 	AssignInitialCustomIconName(VMFileHandle vmFile, int iSet, int icon, int style, int BMFormat);
+void 	ToolFindBitmapAndScreenParameters(IconParameters params,
+				int *widthPtr, int *heightPtr, BMFormat *bmFormatPtr,
+				int *displaySizePtr, int *aspectPtr);
+
+/*----------------------------------------------------------------------------
+ * Other routines
+ *----------------------------------------------------------------------------*/
+void 	LoadOptionsFromINI(word *options, word *pixelSize, word *viewColor);
+void 	IconDBSetViewColors(MemHandle display, int color);
+void 	IconDBSetOptions(MemHandle display, int options);
+int  	ConfirmOnDeleteBox(optr txt);
+dword 	ToolCalcBitmapSize(int width, int height, BMFormat bmpFormat);
+void 	DrawOneBitmapToAnother(VMFileHandle srcFile, VMBlockHandle bmpToDraw,
+		VMFileHandle destFile, VMBlockHandle destBmp,
+		int x0, int y0, optr progressText);
+
+void 	UndoOpenUndoFile(AppAttachFlags attachFlags);
+void 	UndoCloseUndoFile(void);
+void 	UndoUpdateTriggerMonikers(UndoType undoType, UndoType redoType);
+
+void 	DrawFullPalette(GStateHandle gstate);
+int 	PaletteFindIndex(int r, int g, int b, int count);
+PaletteEntry PaletteGetColorFromIndex(int index);
+void 	SetNewColorForCustomColorDialog(int r, int g, int b, Boolean forceUpdateHSVSlider);
+void 	UpdateCustomColorDialogColor(int red, int green, int blue, Boolean areaColorChanged);
+void	OtherContentPaletteStartSelectHandler(int xPosition, int yPosition);
+
+void 	CreateHueColorBar(PaletteEntry *colorBarData);
+void 	CreateSaturationColorBar(PaletteEntry *colorBarData, int h, int v);
+void 	CreateBrightnessColorBar(PaletteEntry *colorBarData, int h, int s);
+void 	GetHSV8BitFromColor(int *h, int *s, int *v, PaletteEntry color );
+void 	GetColorFromHSV8Bit(PaletteEntry *color, int h, int s, int v);
+
+Boolean FatbitsVerifyColor(int format, PaletteEntry color, PaletteEntry *newColor);
+int 	ApproxRGBPaletteLinear(PaletteEntry *palette, PaletteEntry color, int palEntries);
+void 	ToolInitializeDrawAttrs(IconLineAttrs *lineAttrs, IconAreaAttrs *areaAttrs);
+MemHandle FatbitsCreateLineAttrNotifyBlock(IconLineAttrs lineAttrs);
+MemHandle FatbitsCreateAreaAttrNotifyBlock(IconAreaAttrs areaAttrs);
+
+void 	SwitchISet(int iSet, optr oself);
+void 	IconUpdatePalette(VMFileHandle vmFile, int iSet, int icon, VMBlockHandle *paletteBlockPtr);
+PaletteEntry *IconLockGlobalPalette(void);
+void 	IconUnlockGlobalPalette(void);
+
+void ToolSetLineOrAreaColor(GStateHandle gs, BMType bmFormat, PaletteEntry color, Boolean setLineColor);
+#define ToolSetLineColor(gs, fmt, color) ToolSetLineOrAreaColor(gs, fmt, color, TRUE)
+#define ToolSetAreaColor(gs, fmt, color) ToolSetLineOrAreaColor(gs, fmt, color, FALSE)
+
+void ToolDrawAntsOrOutline(FatbitsInstance *pself, int lineStyle, Boolean respectDXY);
+void DrawAntsOrOutlineInternal(FatbitsInstance *pself, int lineStyle, Boolean respectDXY, GStateHandle gs);
+
+Boolean IsColorListInStdPalette(PaletteEntry *colorList, int listCount, int count);
+DisplayClass FindSuggestedDisplayClass(VMFileHandle vmFile, VMBlockHandle bmp);
+
+/*----------------------------------------------------------------------------
+ * import from and export to token database
+ *----------------------------------------------------------------------------*/
+void 	InitializeImportTokenDialog(void);
+dword 	IconTokenListIcons(dword tokenChars, word manufID, MonikerFoundStruct *foundIcons);
+
+
+MemHandle IconGetTokenMonikerBlock(GeodeToken token, word dispSize, word style, word *monikerSize);
+void 	IconDrawMonikerCentered(GStateHandle gsState, VisMonikerWithGString *monikerPtr, int width, int height);
+optr 	MakeMonikerFromIcon(VMFileHandle vmFile, int iSet, int icon, word compressMode, MemHandle mh);
+
+Boolean	ExpTokenFindBitmapSizes(VMFileHandle vmFile, VMBlockHandle bmp, dword *uncompressedSize, dword *compressedSize);
+Boolean ExpTokenTestIfInvisible(VMFileHandle vmFile, VMBlockHandle bmp, int *bmFormatPtr);
+
+int 	ToolGetCurrentISetData(VMFileHandle *vmFile, int *curIcon);
+void 	ToolSetTextWashColor(optr obj, int color);
+Boolean ToolCheckIconsProperties(VMFileHandle vmFile, int iSet);
+int 	ToolCheckIconSizes(VMFileHandle vmFile, VMBlockHandle bmp);
+
+
+
+#endif	/* _ICONED_GOH */
+
+/* *********** End of file iconed.goh ********************/
+
+

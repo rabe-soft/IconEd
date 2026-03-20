@@ -1,0 +1,46 @@
+/**************************************************************************
+ *
+ * PROJECT:	Icon Editor	(GOC Version)
+ * FILE:	docContent.goc
+ *
+ *		Based on the Icon Editor by Steve Yegge, 1992 - 1994
+ *
+ * REVISION HISTORY:
+ *	Name	Date		Description
+ *	----	----		-----------
+ *	RainerB 7/18/2025	Initial revision
+ *
+ *
+ * DESCRIPTION:
+ *
+ *
+ **************************************************************************/
+
+
+/*  Standard include files */
+@include <stdapp.goh>
+@include <ansi/stdlib.h>
+@include <ansi/stdio.h>
+@include <ansi/string.h>
+
+@include "iconed.goh"
+@include "UI/appui.goh"
+
+
+@include "token.h"
+
+extern GlobalStruct global;
+
+
+
+/*---------------------  ---------------------
+ *  Purpose:
+ *  Context:
+ *  Strategy:
+ *  Parameters:
+ *  Return:
+ ---------------------------------------------------------------------------*/
+
+/* *********** End of file docContent.goc ********************/
+
+

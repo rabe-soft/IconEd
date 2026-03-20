@@ -1,0 +1,271 @@
+/******************************************************************************
+ *
+ * PROJECT:	Icon Editor	(GOC Version)
+ * FILE:	iconFile.goh
+ *
+ * AUTHOR:	Steve Yegge, Jul 29, 1992
+ *		Based on the Icon Editor by Steve Yegge, 1992 - 1994
+ *
+ * REVISION HISTORY:
+ *	Name	Date		Description
+ *	----	----		-----------
+ *	SY	7/29/92		Initial revision
+ *	RainerB 7/18/2025	Ported to GOC
+ *
+ *
+ * DESCRIPTION:
+ *	This is the definition of the file structure for the icon database.
+ *
+ *	Note: If you are familar with the original code by Steve, note
+ *	that some terms have been renamed. "Icon" is called "Icon Set"
+ *	now and "Format" has been replaced by "Icon". This is more compatible
+ *	to the terminology uses in the community, and makes the program
+ * 	easier to use.
+ *	The structure itself has not been changed, so it is fully compatible
+ *	with older database files.
+ *
+ *	An icon database consists of a number of "icon sets".  Each icon set
+ *	consists of a header and an array of up to 32 icons (some of which may
+ *	be unused.)  The header structure:
+ *
+ *		-name (32 characters)
+ *		-preview settings:
+ *			-preview object (trigger,tool,etc)
+ *			-on/off color pairs for the preview object
+ *		-icon count (how many icons exist for this icon set, out of 32)
+ *		-IconEntry list
+ *
+ *	Each icon is described by a IconEntry strcuture, which contains
+ *	handles to huge bitmaps. The headers of the bitmaps have all the
+ *	information about size, color and resolution of the icon.
+ *
+ *	There will be a map block that contains a HugeArray handle
+ *	to a list of icon sets - called the mainArray.
+ *
+ *	+-----------------+
+ *      |  MapBlock       |
+ *	+-----------------+
+ *	    |
+ *          | IMBS_mainArray
+ *          |	 +-------------------------------------------+
+ *	    +--> |  Huge Array of ISetHeader                 |
+ *               +----------+----------+----------+----------+
+ *               | Header 1 | Header 2 | Header 3 | ....     |
+ *               +----------+----------+----------+----------+
+ *                   |          |
+ *                   |          +-> ISH_iEntryListBlock/Array-->[ VMBlock 2 .. ]
+ *                   |
+ *                   | ISH_iEntryListBlock + ISH_iEntryListArray
+ *                   |   +---------------------------------------------+
+ *                   +-> | VMBlock containg a ChunkArray of IconEntry  |
+ *                       +----------+----------+----------+------------+
+ *                       |  icon 1  |  icon 2  |  icon 3  | ...        |
+ *                       +----------+----------+----------+------------+
+ *                           |          |
+ *                           |          +-> IE_bitmap-->[ Bitmap 2 .. ]
+ *                           |
+ *                           | IE_bitmap
+ *                           |  +---------------------------------+
+ *                           +->| HugeBitmap: Image for icon 1    |
+ *                              +---------------------------------+
+ *
+ *
+ * COMMENTS/IDEAS (Steve):
+ *
+ *	For viewing the icon sets in the database we can:
+ *		a) show all the icons for each icon set
+ *		b) show one icon for each icon set.
+ *	The database doesn't keep information on what display type each
+ *	icon was intended for, so we can't pick a image based on
+ *	the video resolution we're running at.  We CAN pick a color
+ *	scheme appropriate to the display, though, such as picking the
+ *	first monochrome icon for the icon set if we're running on a
+ *	monochrome display.  For now, though, if the database viewer
+ *	decides to show just one icon for the icon set, it'll have no way
+ *	of deciding which icon was supposed to be the 'CGA' icon.
+ *	The best it could do, perhaps, is pick the smallest monochrome
+ *	icon if the user is viewing the database on a CGA display.
+ *
+ ******************************************************************************/
+
+#ifndef ICON_FILE_GOH
+#define ICON_FILE_GOH
+
+
+/*-----------------------------------------------------------------------------
+ *	Constants
+ *----------------------------------------------------------------------------*/
+
+#define MAX_ISET_NAME_LENGTH	32
+#define ISET_NAME_BUFFER_SIZE	(MAX_ISET_NAME_LENGTH+1)
+
+#define MAX_ICON_NAME_LENGTH	32
+#define ICON_NAME_BUFFER_SIZE	(MAX_ICON_NAME_LENGTH+1)
+
+#define MAX_ICON_PREFIX_LENGTH  8
+
+/*-----------------------------------------------------------------------------
+ *	Data Structures
+ *----------------------------------------------------------------------------*/
+
+/*
+ * MapBlockStruct is used in the map block
+ */
+typedef struct {
+	VMBlockHandle IMBS_mainArray;		/* huge array handle of icon set list (ISetHeader structure) */
+} IconMapBlockStruct;
+
+/*
+ *  ColorPair and PreviewSettingsType are used to store the state
+ *  of the preview area  for each icon set.
+ */
+// XX ?? typedef word Color;
+typedef struct {
+	Color CP_firstColor;		/* first color to mix */
+	Color CP_secondColor;		/* second color to mix */
+} ColorPair;
+
+
+/* Preview group interactions */
+typedef enum {
+	PGIO_TRIGGER,
+	PGIO_TOOL,
+	PGIO_SCROLL_ITEM,
+	PGIO_BULLET_ITEM
+	// Boolean, Flat, framed, tool-single
+} PreviewGroupInteractionObject;
+
+
+typedef struct {
+	PreviewGroupInteractionObject PST_object;
+	ColorPair PST_onColor;
+	ColorPair PST_offColor;
+} PreviewSettingsType;
+
+/*
+ * This is the structure that will be stored in each chunk array
+ * element.  (The iconEntry list is a chunk array).
+ */
+
+typedef struct {
+	char 	IE_name[MAX_ICON_NAME_LENGTH]; /* name for this icon
+						  * use IDGetEntryName() */
+	VisMonikerListEntryType IE_type;
+	VMBlockHandle 	IE_bitmap;		/* VMBlockHande of the
+						 * HugeBitmap containing the
+						 * image for this icon */
+	VMBlockHandle 	IE_extraBlock;		/* IE_reserved used for GOC version
+						 * to store additional data like
+						 * drawing attributes
+						 * R.B. 2025
+						 */
+} IconEntry;
+
+/*
+ * MoreIconData
+ * This structure is stored in a VM block and used to expand the IconEntry
+ * structure. Previous versions of the icon editor will ignore this block.
+ * If you add more informations here, be sure that you code can handle
+ * 'older' versions, that don't have your newly added information.
+ * Unused fileds are zero-initailized. You should also be prepared
+ * for the case, that the data block itself not exists. - R.B. 2025
+ */
+
+typedef struct {
+    WWFixed	lineWidth;
+    int 	lineStyle;
+    int 	lineDrawMask;
+    int		lineMixMode;		/* changing lineMixMode not yet implemented */
+    					/* Is there an API to do this? */
+    PaletteEntry   lineColor;
+    word  	ila_unused[4];
+    } IconLineAttrs;
+
+typedef struct {
+    int 	areaDrawMask;
+    GraphicPattern areaPattern;
+    int 	areaMixMode; 		/* changing areaMixMode not yet implemented */
+    PaletteEntry   areaColor;
+    word  	iaa_unused[4];
+    } IconAreaAttrs;
+
+typedef struct {
+	word 	MID_version;
+	#define MID_INITIAL_VERSION	0
+	#define MID_CURRENT_VERSION	MID_INITIAL_VERSION
+			/* If you add your own data to this structure,
+			 * increment the version number. Be prepared
+			 * to handle older versions AND newer versions
+			 * (i.e. do not assume that unused elements
+			 * are clear). */
+
+	IconLineAttrs	MID_lineAttrs;
+	IconAreaAttrs	MID_areaAttrs;
+
+	word	mid_unused[32];
+			/* This field can be used for further expansions.
+			 * If you need more space, you may savely add new
+			 * fields. Therefore, you should never assume
+              		 * that the MoreIconData structure has a specific
+              		 * size – unless you have created it
+              		 * yourself. */
+} MoreIconData;
+
+
+/*
+ *  Icon Flags, for now, just holds a bit for whether the icon set countains
+ *  pointer image(s) or not.  It's got 15 bits left over, though, so
+ *  if we ever need more information in the icon set we have room for
+ *  it without breaking existing databases.  (I've upped it to 31 bits).
+
+ µµ - Hot spot hier unterbringen
+    - oder in ISetExtra data block
+
+ */
+typedef word IconFlags;
+#define IF_PTR_IMAGE 0x8000	/* is it a cursor image? */
+
+/*
+ * an ISetHeader is the basic data structure element for an icon set
+ * the icon database consists of a huge array of IconHeaders and
+ * all the associated bitmap data.
+ */
+
+typedef struct {
+	char 	ISH_name[MAX_ISET_NAME_LENGTH];	/* name for this icon set
+						 * use IDGetISetName() */
+	PreviewSettingsType ISH_preview;		/* current preview object */
+	IconFlags 	ISH_flags;		/* various (ptr image, etc) */
+	word 		ISH_extraBlock;		/* ISH_rsrvd used for GOC version
+						 * to store additional data
+						 * R.B. 2026 */
+	word 		ISH_entryCount;		/* number of valid entries
+						   in the iconEntry list */
+	ChunkHandle 	ISH_iEntryListArray;	/* handle of a ChunkArray
+						   of IconEntry structures */
+	VMBlockHandle 	ISH_iEntryListBlock;	/* VMBlock containing the
+						   ChunkArray */
+
+} ISetHeader;
+
+typedef struct {
+	word 	ISED_version;
+	#define ISED_INITIAL_VERSION	0
+	#define ISED_CURRENT_VERSION	ISED_INITIAL_VERSION
+			/* If you add your own data to this structure,
+			 * increment the version number. Be prepared
+			 * to handle older versions AND newer versions
+			 * (i.e. do not assume that unused elements
+			 * are clear). */
+
+	GeodeToken	ISED_token;
+			/* This token is used as initial value for export to
+			 * token database.
+			 * It will be updated when the set has been exported.
+			 */
+
+	word ised_unused[32];	/* for futher use. see also mid_unused above */
+
+} ISetExtraData;
+
+#endif /* ICON_FILE_GOH */
